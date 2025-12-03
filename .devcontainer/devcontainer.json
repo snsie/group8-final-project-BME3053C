@@ -1,4 +1,18 @@
 {
+  "name": "Lua devcontainer",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+  "features": {},
+  "postCreateCommand": "sudo apt-get update && sudo apt-get install -y lua5.3 luarocks && sudo luarocks install luacheck",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "sumneko.lua"
+      ]
+    }
+  },
+  "remoteUser": "vscode"
+}
+{
   "name": "Copilot Codespace",
   "build": {
     "dockerfile": "Dockerfile"
