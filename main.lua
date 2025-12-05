@@ -21,8 +21,8 @@ local width, height = 1024, 720
 -- Grid for tower placement
 local grid = {
   cols = 10,
-  rows = 6,
-  cell = 64,
+  rows = 8,
+  cell = 48,
   origin_x = 80,
   origin_y = 80,
 }
@@ -126,17 +126,24 @@ local goal_x = width - 120
 local spawn_x = 20
 local path_y = height/2
 -- Define a more interesting polyline path enemies will follow
+-- Orthogonal path aligned roughly with the placement grid
+local function grid_center(cx, cy)
+  local x = grid.origin_x + (cx-1)*grid.cell + grid.cell/2
+  local y = grid.origin_y + (cy-1)*grid.cell + grid.cell/2
+  return x, y
+end
 local path_points = {
-  { x = spawn_x, y = height*0.25 },
-  { x = 220,      y = height*0.25 },
-  { x = 340,      y = height*0.40 },
-  { x = 480,      y = height*0.35 },
-  { x = 620,      y = height*0.55 },
-  { x = 760,      y = height*0.50 },
-  { x = goal_x,   y = height*0.65 },
+  { x = spawn_x, y = select(2, grid_center(1, 2)) },
+  (function() local x,y=grid_center(2,2); return {x=x,y=y} end)(),
+  (function() local x,y=grid_center(5,2); return {x=x,y=y} end)(),
+  (function() local x,y=grid_center(5,4); return {x=x,y=y} end)(),
+  (function() local x,y=grid_center(7,4); return {x=x,y=y} end)(),
+  (function() local x,y=grid_center(7,6); return {x=x,y=y} end)(),
+  { x = goal_x, y = select(2, grid_center(grid.cols, 6)) },
 }
 -- Placement safety: disallow towers on/near the path within a corridor radius
-local path_corridor_radius = 28
+-- Corridor radius scales with grid cell size so visuals/placement match
+local path_corridor_radius = math.floor(grid.cell * 0.6)
 local function dist2_point_segment(px, py, ax, ay, bx, by)
   local vx, vy = bx - ax, by - ay
   local wx, wy = px - ax, py - ay
@@ -523,21 +530,22 @@ function love.draw()
 
   -- UI
   lg.setColor(1,1,1)
-  lg.print(string.format("Time: %.1fs", game.time), 12, 12)
-  lg.print(string.format("Nutrients: %d", math.floor(game.nutrients)), 12, 32)
-  lg.print(string.format("Wave: %d", game.wave-1), 12, 52)
-  lg.print(string.format("Health: %d/%d", math.max(0, math.floor(game.health)), game.max_health), 12, 192)
-  lg.print("Resting (right-click): " .. (game.resting and "ON" or "OFF"), 12, 72)
-  lg.print("Selected: " .. selected_tower, 12, 92)
-  lg.print("Keys: 1 macrophage, 2 neutrophil, 3 T-cell, 4 B-cell (adaptive in ~25s)", 12, 112)
-  lg.print("5 Cytotoxic T (adaptive), 6 NK; T: spawn tumor (Shift=T x5)", 12, 132)
-  lg.print("Click grid to place tower. Space to spawn wave.", 12, 152)
-  lg.print("Tumors: only Cytotoxic T (5) or NK (6) can kill them.", 12, 172)
+  local uiY = height - 140
+  lg.print(string.format("Time: %.1fs", game.time), 12, uiY)
+  lg.print(string.format("Nutrients: %d", math.floor(game.nutrients)), 12, uiY + 20)
+  lg.print(string.format("Wave: %d", game.wave-1), 12, uiY + 40)
+  lg.print(string.format("Health: %d/%d", math.max(0, math.floor(game.health)), game.max_health), 12, uiY + 60)
+  lg.print("Resting (right-click): " .. (game.resting and "ON" or "OFF"), 12, uiY + 80)
+  lg.print("Selected: " .. selected_tower, 12, uiY + 100)
+  lg.print("Keys: 1 macrophage, 2 neutrophil, 3 T-cell, 4 B-cell (adaptive in ~25s)", 12, uiY + 120)
+  lg.print("5 Cytotoxic T (adaptive), 6 NK; T: spawn tumor (Shift=T x5)", 12, uiY + 140)
+  lg.print("Click grid to place tower. Space to spawn wave.", 12, uiY + 160)
+  lg.print("Tumors: only Cytotoxic T (5) or NK (6) can kill them.", 12, uiY + 180)
 
   -- Selected tower info panel (right side)
   local info = get_selected_info()
   local panelX = width - 360
-  local panelY = 60
+  local panelY = height - (#info*22 + 24) - 20
   lg.setColor(0,0,0,0.35)
   lg.rectangle('fill', panelX-12, panelY-12, 332, #info*22 + 24, 8)
   lg.setColor(1,1,1)
