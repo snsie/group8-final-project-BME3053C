@@ -48,6 +48,7 @@ local game = {
   max_health = 100,
   state = 'playing', -- 'playing', 'won', 'lost'
   win_wave = 6,
+  feedback = nil, -- { text, ends_at, color }
 }
 
 -- Tower definitions
@@ -60,14 +61,18 @@ local tower_types = {
   tcell = { cost = 60, range = 180, rate = 0.8, damage = 30, color = {0.6,0.7,1}, desc = "Adaptive: strong projectile" },
   bcell = { cost = 70, range = 220, rate = 2.0, damage = 8, color = {1,0.7,0.9}, desc = "Adaptive: produces antibodies (particles)" },
   -- eosinophils: effective vs larger targets (fungus/parasite), cause area damage to big enemies
+  -- Note: defined but special targeting vs 'fungus' not explicitly wired yet.
   eosinophil = { cost = 28, range = 100, rate = 1.0, damage = 20, effective_against = { 'fungus' }, color = {1,0.5,0.5}, desc = "Innate: targets larger parasites/fungi" },
   -- dendritic cells: capture antigens and increase chance of adaptive unlock (accelerate adaptive immunity)
+  -- Note: defined but no special behavior added yet (future: speed adaptive unlock / buff).
   dendritic = { cost = 40, range = 140, rate = 3.0, color = {0.5,0.8,0.5}, desc = "Bridges innate->adaptive: speeds adaptive unlock" },
   -- helper T cells (CD4+): buff other adaptive cells (reduce their cooldown)
+  -- Note: defined; future: apply local cooldown multiplier to adaptive towers in range.
   helper_tcell = { cost = 80, range = 220, rate = 3.5, buff = 0.85, color = {0.4,0.8,1}, desc = "Adaptive helper: buffs other adaptive cells' rate" },
   -- cytotoxic T cells (CD8+): kill infected/cancerous cells (required for tumor enemies)
   cytotoxic_tcell = { cost = 100, range = 200, rate = 0.9, damage = 50, color = {0.7,0.2,0.7}, desc = "Adaptive cytotoxic: kills tumor/infected cells" },
   -- regulatory T cells: suppress excessive immune reactions (reduce buff/overactivity)
+  -- Note: defined; future: reduce helper buffs or slow nearby towers slightly.
   regulatory_tcell = { cost = 60, range = 200, rate = 4.0, suppress = 0.9, color = {0.6,0.6,0.9}, desc = "Suppresses excessive immune responses" },
   -- natural killer cells: innate killers that can also remove tumor cells without prior sensitization
   nk = { cost = 90, range = 160, rate = 0.7, damage = 40, color = {0.9,0.4,0.4}, desc = "Innate killer: removes virus-infected and tumor cells" },
@@ -98,10 +103,58 @@ local function cell_to_world(cx, cy)
   return x, y
 end
 
+-- Build a short info list for the currently selected tower type
+local function get_selected_info()
+  local ty = tower_types[selected_tower]
+  if not ty then return { "Selected: " .. tostring(selected_tower) } end
+  local lines = {}
+  table.insert(lines, string.format("%s — %s", selected_tower, ty.desc or ""))
+  table.insert(lines, string.format("Cost: %d  Range: %d  Rate: %.2fs", ty.cost or 0, ty.range or 0, ty.rate or 0))
+  if ty.damage then table.insert(lines, string.format("Damage: %d", ty.damage)) end
+  if ty.engulf_hp then table.insert(lines, string.format("Engulfs ≤ %d HP", ty.engulf_hp)) end
+  if ty.durability then table.insert(lines, string.format("Durability: %d shots", ty.durability)) end
+  if ty.buff then table.insert(lines, string.format("Buff: x%.2f cooldown for nearby adaptive", ty.buff)) end
+  if ty.suppress then table.insert(lines, string.format("Suppress: x%.2f reduce overactivity", ty.suppress)) end
+  if selected_tower == 'cytotoxic_tcell' or selected_tower == 'nk' then
+    table.insert(lines, "Special: Can damage tumor enemies")
+  end
+  return lines
+end
+
 -- Spawn path: enemies enter from left, head to right goal
 local goal_x = width - 120
 local spawn_x = 20
 local path_y = height/2
+-- Define a more interesting polyline path enemies will follow
+local path_points = {
+  { x = spawn_x, y = height*0.25 },
+  { x = 220,      y = height*0.25 },
+  { x = 340,      y = height*0.40 },
+  { x = 480,      y = height*0.35 },
+  { x = 620,      y = height*0.55 },
+  { x = 760,      y = height*0.50 },
+  { x = goal_x,   y = height*0.65 },
+}
+-- Placement safety: disallow towers on/near the path within a corridor radius
+local path_corridor_radius = 28
+local function dist2_point_segment(px, py, ax, ay, bx, by)
+  local vx, vy = bx - ax, by - ay
+  local wx, wy = px - ax, py - ay
+  local vv = vx*vx + vy*vy
+  local t = vv > 0 and math.max(0, math.min(1, (wx*vx + wy*vy) / vv)) or 0
+  local cx, cy = ax + t*vx, ay + t*vy
+  local dx, dy = px - cx, py - cy
+  return dx*dx + dy*dy
+end
+local function is_point_near_path(px, py, radius)
+  local r2 = (radius or path_corridor_radius)^2
+  for i=1,#path_points-1 do
+    local a = path_points[i]
+    local b = path_points[i+1]
+    if dist2_point_segment(px, py, a.x, a.y, b.x, b.y) <= r2 then return true end
+  end
+  return false
+end
 
 -- Game functions
 -- Spawn a single enemy of a given kind.
@@ -113,13 +166,14 @@ local function spawn_enemy(kind, forceTumor)
     hp = def.hp,
     maxhp = def.hp,
     speed = def.speed,
-    x = spawn_x,
-    y = path_y + (math.random()-0.5)*120,
+    x = path_points[1].x,
+    y = path_points[1].y + (math.random()-0.5)*30,
     size = def.size,
     color = def.color,
     reached = false,
       -- small chance an enemy is a tumor-like cell that only cytotoxic T cells / NK can kill
       tumor = (forceTumor and true) or (math.random() < 0.02),
+      wp = 2, -- next waypoint index to move toward
     }
     if e.tumor then e.color = {0.6,0,0.6}; e.size = math.max(10, e.size-2) end
   table.insert(game.enemies, e)
@@ -145,8 +199,13 @@ local function place_tower_at(mousex, mousey)
   end
   local ty = tower_types[selected_tower]
   if game.nutrients < ty.cost then return end
-  game.nutrients = game.nutrients - ty.cost
   local x,y = cell_to_world(cx,cy)
+  -- disallow placing towers on/near the enemy path
+  if is_point_near_path(x, y, path_corridor_radius + 20) then
+    game.feedback = { text = "Cannot place on bloodstream path", ends_at = game.time + 1.3, color = {1,0.4,0.4} }
+    return
+  end
+  game.nutrients = game.nutrients - ty.cost
   local t = { type = selected_tower, cx = cx, cy = cy, x = x, y = y, def = ty, cooldown = 0 }
   if ty.durability then t.durability = ty.durability end
   table.insert(game.towers, t)
@@ -210,12 +269,18 @@ function love.update(dt)
   -- update enemies
   for i=#game.enemies,1,-1 do
     local e = game.enemies[i]
-    local dx = goal_x - e.x
-    local dy = path_y - e.y
-    local dist = math.sqrt(dx*dx+dy*dy)
-    if dist > 1 then
-      e.x = e.x + (dx/dist) * e.speed * dt
-      e.y = e.y + (dy/dist) * e.speed * dt
+    -- Move along polyline waypoints
+    local wp = path_points[e.wp]
+    if wp then
+      local dx = wp.x - e.x
+      local dy = wp.y - e.y
+      local dist = math.sqrt(dx*dx+dy*dy)
+      if dist > 1 then
+        e.x = e.x + (dx/dist) * e.speed * dt
+        e.y = e.y + (dy/dist) * e.speed * dt
+      else
+        e.wp = e.wp + 1
+      end
     else
       -- enemy reached the goal: damage player and remove enemy
       local dmg = enemy_types[e.kind] and enemy_types[e.kind].score or 5
@@ -469,9 +534,53 @@ function love.draw()
   lg.print("Click grid to place tower. Space to spawn wave.", 12, 152)
   lg.print("Tumors: only Cytotoxic T (5) or NK (6) can kill them.", 12, 172)
 
+  -- Selected tower info panel (right side)
+  local info = get_selected_info()
+  local panelX = width - 360
+  local panelY = 60
+  lg.setColor(0,0,0,0.35)
+  lg.rectangle('fill', panelX-12, panelY-12, 332, #info*22 + 24, 8)
+  lg.setColor(1,1,1)
+  for i,ln in ipairs(info) do
+    lg.print(ln, panelX, panelY + (i-1)*22)
+  end
+
+  -- Placement feedback toast
+  if game.feedback and game.time < (game.feedback.ends_at or 0) then
+    local alpha = math.max(0, math.min(1, (game.feedback.ends_at - game.time)))
+    lg.setColor(0,0,0, 0.5*alpha)
+    local fw = 360
+    local fh = 38
+    local fx = (width - fw)/2
+    local fy = height - 90
+    lg.rectangle('fill', fx, fy, fw, fh, 8)
+    local c = game.feedback.color or {1,1,1}
+    lg.setColor(c[1], c[2], c[3], alpha)
+    lg.printf(game.feedback.text or "", fx, fy + 10, fw, 'center')
+  else
+    game.feedback = nil
+  end
+
   if not game.unlocked_adaptive then
     lg.setColor(1,1,1,0.6)
     lg.print("Adaptive immunity will unlock shortly...", width - 320, 12)
+  end
+
+  -- Draw the path polyline and corridor
+  lg.setColor(0.25,0.3,0.4,0.25)
+  for i=1,#path_points-1 do
+    local a = path_points[i]
+    local b = path_points[i+1]
+    -- draw corridor as thick line approximation
+    lg.setLineWidth(path_corridor_radius*2)
+    lg.line(a.x, a.y, b.x, b.y)
+  end
+  lg.setLineWidth(1)
+  lg.setColor(0.7,0.85,1,0.6)
+  for i=1,#path_points-1 do
+    local a = path_points[i]
+    local b = path_points[i+1]
+    lg.line(a.x, a.y, b.x, b.y)
   end
 
   -- End screens
