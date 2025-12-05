@@ -20,7 +20,7 @@ local width, height = 1024, 720
 
 -- Grid for tower placement
 local grid = {
-  cols = 10,
+  cols = 18,
   rows = 8,
   cell = 48,
   origin_x = 80,
@@ -534,7 +534,8 @@ function love.draw()
 
   -- UI
   lg.setColor(1,1,1)
-  local uiY = height - 140
+  -- Raise the bottom UI block so all lines fit on screen
+  local uiY = height - 220
   lg.print(string.format("Time: %.1fs", game.time), 12, uiY)
   lg.print(string.format("Nutrients: %d", math.floor(game.nutrients)), 12, uiY + 20)
   lg.print(string.format("Wave: %d", game.wave-1), 12, uiY + 40)
